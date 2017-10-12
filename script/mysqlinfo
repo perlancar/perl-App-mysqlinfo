@@ -1,0 +1,19 @@
+#!perl
+
+use 5.010001;
+use strict;
+use warnings;
+
+use Perinci::CmdLine::Any;
+
+Perinci::CmdLine::Any->new(
+    url => '/App/mysqlinfo/',
+    subcommands => {
+        'list-tables'  => {url => '/App/mysqlinfo/list_tables'},
+        'list-columns' => {url => '/App/mysqlinfo/list_columns'},
+        'dump-table'   => {url => '/App/mysqlinfo/dump_table'},
+    },
+)->run;
+
+# ABSTRACT:
+# PODNAME:
