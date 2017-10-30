@@ -13,7 +13,34 @@ Perinci::CmdLine::Any->new(
         'list-columns' => {url => '/App/mysqlinfo/list_columns'},
         'dump-table'   => {url => '/App/mysqlinfo/dump_table'},
     },
+    log => 1,
+    log_level => 'info',
 )->run;
 
 # ABSTRACT:
 # PODNAME:
+
+=head1 SYNOPSIS
+
+List tables:
+
+ % mysqlinfo list-tables mydb
+
+List columns of a table:
+
+ % mysqlinfo list-columns mydb mytable
+ % mysqlinfo list-columns -l mydb mytable   ; # show detail
+
+Dump a table into various format:
+
+ % mysqlinfo dump-table mydb mytable
+
+
+=head1 DESCRIPTION
+
+B<mysqlinfo> is a slightly more convenient L<dbinfo> when working with MySQL.
+
+
+=head1 SEE ALSO
+
+L<dbinfo> from L<App::dbinfo> is the more generic version of this utility.

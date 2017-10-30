@@ -17,7 +17,7 @@ $SPEC{':package'} = {
     summary => 'Get/extract information from MySQL database',
 };
 
-my %args_common = (
+our %args_common = (
     dbname => {
         schema => 'str*',
         tags => ['connection', 'common'],
@@ -31,16 +31,38 @@ my %args_common = (
         schema => ['int*', min=>1, max=>65535], # XXX port
         tags => ['connection', 'common'],
     },
-    user     => $App::dbinfo::args_common{user},
-    password => $App::dbinfo::args_common{password},
-    dbh      => $App::dbinfo::args_common{dbh},
+    user => {
+        schema => 'str*',
+        cmdline_aliases => {u=>{}},
+        tags => ['connection', 'common'],
+    },
+    password => {
+        schema => 'str*',
+        cmdline_aliases => {p=>{}},
+        tags => ['connection', 'common'],
+        description => <<'_',
+
+You might want to specify this parameter in a configuration file instead of
+directly as command-line option.
+
+_
+    },
+    dbh => {
+        summary => 'Alternative to specifying dsn/user/password (from Perl)',
+        schema => 'obj*',
+        tags => ['connection', 'common', 'hidden-cli'],
+    },
 );
 
-my %args_rels_common = (
+our %args_rels_common = (
     'req_one&' => [
         [qw/dbname dbh/],
     ],
 );
+
+our %arg_table = %App::dbinfo::arg_table;
+
+our %arg_detail = %App::dbinfo::arg_detail;
 
 sub __json_encode {
     state $json = do {
@@ -51,20 +73,37 @@ sub __json_encode {
 }
 
 sub _connect {
-    require DBI;
+    require DBIx::Connect::MySQL;
 
     my $args = shift;
 
     return $args->{dbh} if $args->{dbh};
-    DBI->connect(
+    DBIx::Connect::MySQL->connect(
         join(
             "",
             "DBI:mysql:database=$args->{dbname}",
-            (defined $args->{host} ? ";host=$args{host}" : ""),
-            (defined $args->{port} ? ";port=$args{port}" : ""),
-
+            (defined $args->{host} ? ";host=$args->{host}" : ""),
+            (defined $args->{port} ? ";port=$args->{port}" : ""),
+        ),
         $args->{user}, $args->{password},
         {RaiseError=>1});
+}
+
+sub _preprocess_args {
+    my $args = shift;
+
+    if ($args->{dbh}) {
+        return $args;
+    }
+    $args->{dbh} = _connect($args);
+    $args->{_dbname} = delete $args->{dbname};
+
+    if (defined $args->{table}) {
+        $args->{table} = "$args->{_dbname}.$args->{table}"
+            unless $args->{table} =~ /\./;
+    }
+
+    $args;
 }
 
 $SPEC{list_tables} = {
@@ -78,14 +117,14 @@ $SPEC{list_tables} = {
     },
 };
 sub list_tables {
-    require DBIx::Diff::Schema;
-
     my %args = @_;
 
-    my $dbh = _connect(\%args);
-
-    return [200, "OK", [
-            DBIx::Diff::Schema::_list_tables($dbh)]];
+    _preprocess_args(\%args);
+    my $res = App::dbinfo::list_tables(%args);
+    if ($res->[0] == 200) {
+        for (@{ $res->[2] }) { s/^\Q$args{_dbname}\E\.// }
+    }
+    $res;
 }
 
 $SPEC{list_columns} = {
@@ -101,32 +140,16 @@ $SPEC{list_columns} = {
     },
     examples => [
         {
-            args => {dsn=>'dbi:SQLite:database=/tmp/test.db', table=>'main.table1'},
+            args => {dbname=>'test', table=>'main.table1'},
             test => 0,
             'x.doc.show_result' => 0,
         },
     ],
 };
 sub list_columns {
-    require DBIx::Diff::Schema;
-
     my %args = @_;
-
-    my $dbh = _connect(\%args);
-
-    my $ltres = list_tables(%args);
-    return [500, "Can't list tables: $ltres->[0] - $ltres->[1]"]
-        unless $ltres->[0] == 200;
-    my $tables = $ltres->[2];
-    #my $tables_wo_schema = [map {my $n=$_; $n=~s/.+\.//; $n} @$tables];
-    #return [404, "No such table '$args{table}'"]
-    #    unless grep { $args{table} eq $_ } (@$tables, @$tables_wo_schema);
-    return [404, "No such table '$args{table}'"]
-        unless grep { $args{table} eq $_ } @$tables;
-
-    my @cols = DBIx::Diff::Schema::_list_columns($dbh, $args{table});
-    @cols = map { $_->{COLUMN_NAME} } @cols unless $args{detail};
-    return [200, "OK", \@cols];
+    _preprocess_args(\%args);
+    App::dbinfo::list_columns(%args);
 }
 
 $SPEC{dump_table} = {
@@ -135,49 +158,7 @@ $SPEC{dump_table} = {
     args => {
         %args_common,
         %arg_table,
-        row_format => {
-            schema => ['str*', in=>['array', 'hash']],
-            default => 'hash',
-            cmdline_aliases => {
-                array => { summary => 'Shortcut for --row-format=array', is_flag=>1, code => sub { $_[0]{row_format} = 'array' } },
-                a     => { summary => 'Shortcut for --row-format=array', is_flag=>1, code => sub { $_[0]{row_format} = 'array' } },
-            },
-        },
-        exclude_columns => {
-            'x.name.is_plural' => 1,
-            'x.name.singular' => 'exclude_column',
-            schema => ['array*', {
-                of=>'str*',
-                #'x.perl.coerce_rules'=>['str_comma_sep'],
-            }],
-            cmdline_aliases => {C=>{}},
-        },
-        include_columns => {
-            'x.name.is_plural' => 1,
-            'x.name.singular' => 'include_column',
-            schema => ['array*', {
-                of=>'str*',
-                #'x.perl.coerce_rules'=>['str_comma_sep'],
-            }],
-            cmdline_aliases => {c=>{}},
-        },
-        wheres => {
-            summary => 'Add WHERE clause',
-            'x.name.is_plural' => 1,
-            'x.name.singular' => 'where',
-            schema => ['array*', {
-                of=>'str*',
-            }],
-            cmdline_aliases => {w=>{}},
-        },
-        limit_number => {
-            schema => 'nonnegint*',
-            cmdline_aliases => {n=>{}},
-        },
-        limit_offset => {
-            schema => 'nonnegint*',
-            cmdline_aliases => {o=>{}},
-        },
+        %App::dbinfo::args_dump_table,
     },
     args_rels => {
         %args_rels_common,
@@ -186,82 +167,12 @@ $SPEC{dump_table} = {
         schema => 'str*',
     },
     examples => [
-        {
-            argv => [qw/table1/],
-            test => 0,
-            'x.doc.show_result' => 0,
-        },
-        {
-            summary => 'Only include specified columns',
-            argv => [qw/table2 -c col1 -c col2/],
-            test => 0,
-            'x.doc.show_result' => 0,
-        },
-        {
-            summary => 'Exclude some columns',
-            argv => [qw/table3 -C col1 -C col2/],
-            test => 0,
-            'x.doc.show_result' => 0,
-        },
-        {
-            summary => 'Select some rows',
-            argv => ['table4', '-w', q(name LIKE 'John*'), '-n', 10],
-            test => 0,
-            'x.doc.show_result' => 0,
-        },
     ],
 };
 sub dump_table {
-    require DBIx::Diff::Schema;
-
     my %args = @_;
-    my $table = $args{table};
-    my $is_hash = $args{row_format} eq 'array' ? 0:1;
-
-    # let's ignore schema for now
-    $table =~ s/.+\.//;
-
-    $is_hash++ if $args{exclude_columns} && @{$args{exclude_columns}};
-
-    my $col_term = "*";
-    if ($args{include_columns} && @{$args{include_columns}}) {
-        $col_term = join(",", map {qq("$_")} @{$args{include_columns}});
-    }
-
-    my $dbh = _connect(\%args);
-
-    my $wheres = $args{wheres};
-    my $sql = join(
-        "",
-        "SELECT $col_term FROM \"$table\"",
-        ($args{wheres} && @{$args{wheres}} ?
-             " WHERE ".join(" AND ", @{$args{wheres}}) : ""),
-        # XXX what about database that don't support LIMIT clause?
-        (defined $args{limit_offset} ? " LIMIT $args{limit_offset},".($args{limit_number} // "-1") :
-             defined $args{limit_number} ? " LIMIT $args{limit_number}" : ""),
-    );
-
-    my $sth = $dbh->prepare($sql);
-    $sth->execute;
-
-    my $code_get_row = sub {
-        my $row;
-        if ($is_hash) {
-            $row = $sth->fetchrow_hashref;
-            return undef unless $row;
-            if ($args{exclude_columns} && @{$args{exclude_columns}}) {
-                for (@{ $args{exclude_columns} }) {
-                    delete $row->{$_};
-                }
-            }
-        } else {
-            $row = $sth->fetchrow_arrayref;
-            return undef unless $row;
-        }
-        __json_encode($row);
-    };
-
-    [200, "OK", $code_get_row, {stream=>1}];
+    _preprocess_args(\%args);
+    App::dbinfo::dump_table(%args);
 }
 
 
@@ -270,11 +181,11 @@ sub dump_table {
 
 =head1 SYNOPSIS
 
-See included script L<dbinfo>.
+See included script L<mysqlinfo>.
 
 
 =head1 SEE ALSO
 
 L<DBI>
 
-L<App::diffdb>
+L<App::dbinfo>
