@@ -2,3 +2,4 @@ App-mysqlinfo-*
 .build
 *~
 nytprof*
+.DS_Store
